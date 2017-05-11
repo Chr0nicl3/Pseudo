@@ -1,0 +1,422 @@
+%{
+	#include <stdio.h>
+	#include <stdarg.h>
+	#include <stdlib.h>
+	#include "lex.yy.c"
+	#include "pseudo.h"
+	#include "interpreter.h"
+
+	nodeType *opr(int oper, int nops, ...);
+	nodeType *integer(int value);
+	nodeType *flt(float value);
+	nodeType *string(char *value);
+	nodeType *id(int i);
+	void freeNode(nodeType *p);
+	data ex(nodeType *p);
+	int yylex(void);
+	void yyerror(char *);
+	void runtimeError(char *);
+	char *file_name;
+
+	int enclosed = 0;
+
+	//#define YYDEBUG 1
+%}
+
+%union{
+	int iValue;
+	float fValue;
+	char *sValue;
+	char sIndex;
+	struct nodeType *nptr;
+};
+
+%token <sIndex> IDENTIFIER 
+%token <iValue> NUM 
+%token <fValue> REAL 
+%token <sValue> STRING_LITERAL INT FLOAT STRING
+%token INC_OP DEC_OP LE_OP GE_OP EQ_OP NE_OP POW_OP UMINUS POST_INC_OP PRE_INC_OP POST_DEC_OP PRE_DEC_OP
+%token AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
+%token SUB_ASSIGN AND_ASSIGN
+%token XOR_ASSIGN OR_ASSIGN NEW_LINE
+%token INPUT PRINT END
+%token IF ELSE WHILE FOR REPEAT UNTIL CONTINUE BREAK RETURN TO
+
+%type <nptr> statement expression_statement expression
+%type <nptr> assignment_expression conditional_expression logical_or_expression logical_and_expression or_expression
+%type <nptr> xor_expression and_expression equality_expression relational_expression additive_expression
+%type <nptr> multiplicative_expression cast_expression unary_expression postfix_expression primary_expression
+%type <nptr> selection_statement loop_statement jump_statement io_statement statement_list
+
+%start begin
+%%
+
+begin
+	:program
+										{exit(0);}
+
+program
+	:program statement
+										{ ex($2); freeNode($2);}
+	|statement
+										{ ex($1); freeNode($1);}							
+	;
+
+statement
+	:expression_statement
+										{ $$ = $1; }
+	|selection_statement
+										{ $$ = $1; }
+	|loop_statement
+										{ $$ = $1; }
+	|jump_statement NEW_LINE
+										{ $$ = $1; }
+	|io_statement 
+										{ $$ = $1; }
+	|statement error NEW_LINE
+										{ yyerrok;}
+	;
+
+statement_list
+	:statement
+										{ $$ = $1; }
+	|statement_list statement
+										{ $$ = opr(NEW_LINE, 2, $1, $2); }
+	;
+
+expression_statement
+	:expression NEW_LINE
+										{ $$ = $1; }
+	|NEW_LINE							
+										{ $$ = opr(NEW_LINE, 2, NULL, NULL); }
+	;
+
+expression
+	:assignment_expression
+										{ $$ = $1; }
+	|expression ',' assignment_expression
+										{ $$ = opr(',', 2, $1, $3); }
+	;
+
+assignment_expression
+	:conditional_expression
+										{ $$ = $1; }
+	|IDENTIFIER '=' conditional_expression
+										{ $$ = opr('=', 2, id($1), $3); }
+	|IDENTIFIER AND_ASSIGN conditional_expression
+										{ $$ = opr(AND_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER OR_ASSIGN conditional_expression
+										{ $$ = opr(OR_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER XOR_ASSIGN conditional_expression
+										{ $$ = opr(XOR_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER ADD_ASSIGN conditional_expression
+										{ $$ = opr(ADD_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER MUL_ASSIGN conditional_expression
+										{ $$ = opr(MUL_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER DIV_ASSIGN conditional_expression
+										{ $$ = opr(DIV_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER SUB_ASSIGN conditional_expression
+										{ $$ = opr(SUB_ASSIGN, 2, id($1), $3); }
+	|IDENTIFIER MOD_ASSIGN conditional_expression
+										{ $$ = opr(MOD_ASSIGN, 2, id($1), $3); }
+	;
+
+conditional_expression
+	:logical_or_expression
+										{ $$ = $1; }
+	|logical_or_expression '?' expression ':' conditional_expression
+										{ $$ = opr('?', 3, $1, $3, $5); }
+	;
+
+logical_or_expression
+	:logical_and_expression
+										{ $$ = $1; }
+	|logical_or_expression OR_OP logical_and_expression
+										{ $$ = opr(OR_OP, 2, $1, $3); }
+	;
+
+logical_and_expression
+	:or_expression
+										{ $$ = $1; }
+	|logical_and_expression AND_OP or_expression
+										{ $$ = opr(AND_OP, 2, $1, $3); }
+	;
+
+or_expression
+	:xor_expression
+										{ $$ = $1; }
+	|or_expression '|' xor_expression
+										{ $$ = opr('|', 2, $1, $3); }
+	;
+
+xor_expression
+	:and_expression
+										{ $$ = $1; }
+	|xor_expression '^' and_expression
+										{ $$ = opr('^', 2, $1, $3); }
+	;
+
+and_expression
+	:equality_expression
+										{ $$ = $1; }
+	|and_expression '&' equality_expression
+										{ $$ = opr('&', 2, $1, $3); }
+	;
+
+equality_expression
+	:relational_expression
+										{ $$ = $1; }
+	|equality_expression EQ_OP relational_expression
+										{ $$ = opr(EQ_OP, 2, $1, $3); }
+	|equality_expression NE_OP relational_expression
+										{ $$ = opr(NE_OP, 2, $1, $3); }
+	;
+
+relational_expression
+	:additive_expression
+										{ $$ = $1; }
+	|relational_expression '<' additive_expression
+										{ $$ = opr('<', 2, $1, $3); }
+	|relational_expression '>' additive_expression
+										{ $$ = opr('>', 2, $1, $3); }
+	|relational_expression GE_OP additive_expression
+										{ $$ = opr(GE_OP, 2, $1, $3); }
+	|relational_expression LE_OP additive_expression
+										{ $$ = opr(LE_OP, 2, $1, $3); }
+	;
+
+additive_expression
+	:multiplicative_expression
+										{ $$ = $1; }
+	|additive_expression '+' multiplicative_expression
+										{ $$ = opr('+', 2, $1, $3); }
+	|additive_expression '-' multiplicative_expression
+										{ $$ = opr('-', 2, $1, $3); }
+	;
+
+multiplicative_expression
+	:cast_expression
+										{ $$ = $1; }
+	|multiplicative_expression '*' cast_expression
+										{ $$ = opr('*', 2, $1, $3); }
+	|multiplicative_expression '%' cast_expression
+										{ $$ = opr('%', 2, $1, $3); }
+	|multiplicative_expression '/' cast_expression
+										{ $$ = opr('/', 2, $1, $3); }
+	;
+
+cast_expression
+	:unary_expression
+										{ $$ = $1; }
+	|'(' INT ')' cast_expression
+										{ $$ = opr(INT, 1, $4); }
+	|'(' STRING ')' cast_expression
+										{ $$ = opr(STRING, 1, $4); }
+	;
+
+unary_expression
+	:postfix_expression
+										{ $$ = $1; }
+	|INC_OP IDENTIFIER
+										{ $$ = opr(PRE_INC_OP, 1, id($2)); }
+	|DEC_OP IDENTIFIER
+										{ $$ = opr(PRE_DEC_OP, 1, id($2)); }
+	|'-' cast_expression
+										{ $$ = opr('-', 1, $2); }
+	|'+' cast_expression
+										{ $$ = opr('+', 1, $2); }
+	|'!' cast_expression
+										{ $$ = opr('!', 1, $2); }
+	|'~' cast_expression
+										{ $$ = opr('~', 1, $2); }
+	;
+
+postfix_expression
+	:primary_expression
+										{ $$ = $1; }
+	|IDENTIFIER INC_OP
+										{ $$ = opr(POST_INC_OP, 1, id($1)); }
+	|IDENTIFIER DEC_OP
+										{ $$ = opr(POST_DEC_OP, 1, id($1)); }
+	;
+
+primary_expression
+	:IDENTIFIER
+										{ $$ = id($1); }
+	|REAL
+										{ $$ = flt($1); }
+	|NUM
+										{ $$ = integer($1); }
+	|STRING_LITERAL 
+										{ $$ = string($1); }
+	|'(' expression ')'
+										{ $$ = $2; }
+	;
+
+
+selection_statement
+	:IF expression NEW_LINE statement_list END NEW_LINE
+										{ $$ = opr(IF, 2, $2, $4); }
+	|IF expression NEW_LINE statement_list ELSE NEW_LINE statement_list END NEW_LINE
+										{ $$ = opr(IF, 3, $2, $4, $7); }
+	;
+
+loop_statement
+	:WHILE expression NEW_LINE 
+										{enclosed++;}
+	statement_list END NEW_LINE
+										{
+											enclosed--;
+											$$ = opr(WHILE, 2, $2, $5);
+										}
+	|FOR IDENTIFIER '=' expression TO expression NEW_LINE
+										{enclosed++;}
+	 statement_list END NEW_LINE
+										{ 	
+											enclosed--;
+											$$ = opr(FOR, 4, id($2), $4, $6, $9);
+										}
+	;
+
+jump_statement
+	:BREAK
+										{
+											if(enclosed<=0)
+												yyerror("Break Outside Loop :"); 
+											$$ = opr(BREAK, 1, enclosed);
+										}
+	|CONTINUE
+										{
+											if(enclosed<=0)
+												yyerror("Continue Outside Loop :"); 
+											$$ = opr(CONTINUE, 1, enclosed);
+										}
+	;
+
+io_statement
+	:PRINT expression NEW_LINE
+										{ $$ = opr(PRINT, 1, $2); }
+	|INPUT '(' INT ')' IDENTIFIER NEW_LINE
+										{ $$ = opr(INPUT, 2, string($3), id($5)); }
+	|INPUT '(' FLOAT ')' IDENTIFIER NEW_LINE
+										{ $$ = opr(INPUT, 2, string($3), id($5)); }
+	|INPUT '(' STRING ')' IDENTIFIER NEW_LINE
+										{ $$ = opr(INPUT, 2, string($3), id($5)); }
+
+%%
+#define SIZEOF_NODETYPE ((char *)&p->con-(char *)p) 
+
+nodeType *integer(int value){
+	nodeType *p;
+	/*allocate node*/
+
+    if ((p = malloc(sizeof(nodeType))) == NULL) 
+        yyerror("out of memory"); 
+
+    /* copy information */ 
+
+    p->type = typeInt; 
+    p->con.value = value; 
+    return p; 
+}
+
+nodeType *flt(float value){
+	nodeType *p;
+
+	/*allocate node*/
+
+	if((p = malloc(sizeof(nodeType))) == NULL)
+		yyerror("out of memory");
+
+	/*copy information*/
+
+	p->type = typeFloat;
+	p->flt.value = value;
+	return p;
+}
+
+nodeType *string(char *value){
+	nodeType *p;
+
+	/*allocate node*/
+	//puts("in string");
+	if((p = malloc(sizeof(nodeType))) == NULL)
+		yyerror("out of memory");
+
+	/*copy information*/
+	p->type = typeString;
+	p->str.value = value;
+	//printf("value : %s\n", value);
+	//printf("function : %s\n", p->str.value);
+	return p;
+}
+
+nodeType *id(int i){
+	nodeType *p;
+	/*allocate node*/
+
+	if((p = malloc(sizeof(nodeType))) == NULL)
+		yyerror("out of memory");
+
+	/*copy information*/
+
+	p->type = typeId;
+	p->id.i = i;
+	return p;
+}
+
+nodeType *opr(int oper, int nops, ...){
+	nodeType *p;
+	va_list ap;
+
+	/*allocate node and expand op[] array*/
+
+	if((p = malloc(sizeof(nodeType) + (nops-1)*sizeof(nodeType *))) == NULL)
+		yyerror("out of memory");
+
+	/*copy information*/
+
+	p->type = typeOpr;
+	p->opr.oper = oper;
+	p->opr.nops = nops;
+	va_start(ap, nops);
+	for(int i=0; i<nops; ++i){
+		p->opr.op[i]=va_arg(ap, nodeType *);
+	}
+	va_end(ap);
+	return p;
+}
+
+void freeNode(nodeType *p){
+	if(!p) return;
+	if(p->type == typeOpr){
+		for(int i=0; i<p->opr.nops; ++i){
+			freeNode(p->opr.op[i]);
+		}
+	}
+	free(p);
+}
+
+void yyerror(char *s){
+	fprintf(stderr, "%s : %s %i:%i : near %s\n", file_name, s, lineCount, colCount, buffer);	
+}
+
+
+int main(int argc, char* argv[]){
+	#if YYDEBUG
+	        yydebug = 1; 
+    #endif 
+	if (argc > 1){
+		FILE *file;
+		file = fopen(argv[1], "r");
+		if (!file){
+			fprintf(stderr, "Could not open %s\n", argv[1]);
+			exit(1);
+		}
+		file_name = argv[1];
+		yyin = file;
+	}
+	yyparse();
+	return 0;
+}
+
